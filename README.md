@@ -1,10 +1,11 @@
 # oci-free-dev-env
 
-Provision a **free remote development host on Oracle Cloud** and configure it end to end: OCI CLI bootstrap, VCN/subnet/NSG/instance, then a hardened Ubuntu 22.04 Ansible stack — Tailscale-only SSH, ufw, fail2ban, mosh, persistent tmux, Caddy tailnet web previews, and an on-host verification suite.
+After some weeks using a **free remote development host on Oracle Cloud** I can tell how happy I am. Now my agents have a place to code without my local machine being a bottleneck. 
+
+This skill automates the whole process of provision a **free remote development host on Oracle Cloud** and configure it end to end: OCI CLI bootstrap, VCN/subnet/NSG/instance, then a hardened Ubuntu 22.04 Ansible stack — Tailscale-only SSH, ufw, fail2ban, mosh, persistent tmux, Caddy tailnet web previews, and an on-host verification suite.
 
 It is packaged as an **agent skill** (`SKILL.md`) so an AI coding agent can run the whole flow, including the two steps only a human can do (uploading the OCI API key, approving the Tailscale login).
 
-Derived from the author's private Ansible blueprint for a Tailscale-only dev host, then genericized: no personal hostnames, domains, OCIDs, or IPs.
 
 ```
 local machine                          Oracle Cloud (Always Free)                 tailnet
@@ -27,6 +28,19 @@ local machine                          Oracle Cloud (Always Free)               
 
 ## Quickstart
 
+For agents:
+
+```bash
+# Oh My Pi
+git clone https://github.com/faramirezs/oci-free-dev-env-skill ~/.omp/agent/skills/oci-free-dev-env
+# Claude Code style layouts
+git clone https://github.com/faramirezs/oci-free-dev-env-skill ~/.claude/skills/oci-free-dev-env
+```
+
+Then ask the agent for a "free remote dev environment on Oracle Cloud"
+
+
+For humans:
 ```bash
 git clone https://github.com/faramirezs/oci-free-dev-env-skill
 cd oci-free-dev-env-skill
@@ -44,16 +58,6 @@ Two human steps, both flagged by the scripts:
 1. **OCI API key.** On first run `preflight.sh` exits 2 and prints the guide: run `oci setup config`, then paste `cat ~/.oci/oci_api_key_public.pem` into Console → Profile → My profile → API keys → *Add API key* → *Paste a public key* (<https://cloud.oracle.com/identity/domains/my-profile/api-keys>), then re-run.
 2. **Tailscale login.** Without a `TAILSCALE_AUTH_KEY` in `.env`, the playbook prints a `https://login.tailscale.com/...` URL; open it once and the host joins the tailnet.
 
-## Usage as an agent skill
-
-```bash
-# Oh My Pi
-git clone https://github.com/faramirezs/oci-free-dev-env-skill ~/.omp/agent/skills/oci-free-dev-env
-# Claude Code style layouts
-git clone https://github.com/faramirezs/oci-free-dev-env-skill ~/.claude/skills/oci-free-dev-env
-```
-
-Then ask the agent for a "free remote dev environment on Oracle Cloud" and it loads `SKILL.md`.
 
 ## What the Ansible setup covers
 
@@ -177,13 +181,3 @@ ansible/
   files/ssh_config     client snippet appended by configure.sh
 state/devhost.env      generated: instance OCID, IPs, NSG/subnet ids (gitignored)
 ```
-
-## What this fixes relative to the blueprint
-
-The blueprint's verification suite ran personal hosts, pinned personal domains/IPs/OCIDs, and had three gaps that only show up on a clean host:
-
-1. **sshd hardening was verified but never applied.** Its sshd test asserted `PermitRootLogin`/`PasswordAuthentication`, but no role wrote them — it passed only because the image happened to be hardened. New `sshd` role writes and validates the config.
-2. **fail2ban had no jail.** The package was installed, the service was checked, and nothing configured it. New `fail2ban` role adds the sshd jail.
-3. **The mosh "tailscale bind" was inert.** `/etc/systemd/system/mosh-server@.service.d/10-tailscale.conf` attached to a unit Ubuntu does not ship, and `MOSH_SERVER_NETWORK` is not a mosh variable. Binding comes from the mosh client (`--bind-server=ssh`, default), and the playbook now documents that and removes the stale drop-in.
-
-Also: the dedicated egress-only security list (the VCN default allows SSH from anywhere), a `storage` role for volume growth, a generic verification suite replacing the host-specific one, `python3-apt` bootstrap for fresh cloud images, cloud-init wait before the first playbook run, and the personal Caddy sites replaced by a `caddy_public_sites` list.
