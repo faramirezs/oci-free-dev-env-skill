@@ -1,6 +1,7 @@
 ---
 # devhost — defaults. Host-specific values are rendered into
-# group_vars/all/local.yml by scripts/configure.sh; secrets live in
+# host_vars/<host>.yml by scripts/configure.sh (host vars outrank every
+# group_vars file, so the rendered values always win); secrets live in
 # group_vars/all/secrets.yml (gitignored).
 
 # --- Identity -------------------------------------------------------------
@@ -15,11 +16,9 @@ required_ubuntu_version: "22.04"
 
 # --- Tailscale ------------------------------------------------------------
 tailscale_hostname: "{{ devhost_name }}"
-tailscale_interface: "tailscale0"
 tailscale_accept_routes: false
 tailscale_accept_dns: true
 tailscale_exit_node: false
-tailscale_advertise_routes: ""
 # Tailscale SSH: also accept `tailscale ssh <user>@<host>`, authenticated by
 # tailnet identity instead of the SSH key. Plain sshd keeps working either way.
 tailscale_ssh: true
@@ -58,7 +57,7 @@ expose_public_https: false
 mosh_server_network_timeout: 604800   # seconds without a client update before exit
 
 # --- Caddy (tailnet ingress) ---------------------------------------------
-# Terminates HTTP on the tailnet so ports 9000-9099 answer as soon as the
+# Terminates HTTP on the tailnet so ports 9000-9009 answer as soon as the
 # upstream dev server starts. HTTP is fine there: Tailscale (WireGuard)
 # encrypts the transit.
 caddy_listen_tailscale_only: true

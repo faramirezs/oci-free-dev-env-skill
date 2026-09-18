@@ -3,6 +3,5 @@ tailscale_repo_distro: "{{ ansible_distribution_release }}"
 tailscale_install_url: "https://pkgs.tailscale.com/stable/ubuntu/{{ tailscale_repo_distro }}.noarmor.gpg"
 tailscale_repo_keyring: "/usr/share/keyrings/tailscale-archive-keyring.gpg"
 tailscale_repo_list: "/etc/apt/sources.list.d/tailscale.list"
-tailscale_state_dir: "/var/lib/tailscale"
 # Seconds the CLI waits for interactive login approval before returning the URL.
 tailscale_login_timeout: "10s"

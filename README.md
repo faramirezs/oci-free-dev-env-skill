@@ -63,7 +63,7 @@ Then ask the agent for a "free remote dev environment on Oracle Cloud" and it lo
 |---|---|---|
 | `common` | apt cache + base toolchain (git, build-essential, tmux, fzf, ripgrep, python3-venv, jq, rsync, htop, strace …), persistent journald, unattended **security** upgrades only, timezone, per-user `.ssh` hygiene (0700/0600, never overwrites an existing client config) | — |
 | `storage` | grows the root partition/filesystem when the boot volume is larger than the partition (cloud-init normally already did it; this covers a volume enlarged later) | `07-storage` |
-| `tailscale` | installs tailscaled, joins the tailnet with an auth key **or prints a login URL**, `--accept-dns` (MagicDNS), optional Tailscale SSH, operator rights for the login user, publishes the tailnet address as the bind address for mosh/Caddy. Idempotent: parses `tailscale status --json` instead of string-matching it | `01-tailscale` |
+| `tailscale` | installs tailscaled, joins the tailnet with an auth key **or prints a login URL**, `--accept-dns` (MagicDNS), optional Tailscale SSH, operator rights for the login user; its tailnet address becomes the bind address the `caddy` role uses. Idempotent: parses `tailscale status --json` instead of string-matching it | `01-tailscale` |
 | `sshd` | drop-in `99-devhost-hardening.conf`: root login restricted, password and keyboard-interactive auth off, pubkeys required, `MaxAuthTries 4`, idle disconnects. Validated with `sshd -t` before reload and asserted against the **effective** `sshd -T` | `05-sshd` |
 | `fail2ban` | sshd jail, systemd backend, 5 tries / 1 h ban, tailnet range `100.64.0.0/10` exempt so a stale key can never lock you out of the only path in | `06-firewall` |
 | `firewall` | ufw: default deny incoming/routed, allow outgoing; allow rules are installed **before** ufw is enabled (lockout-safe ordering); only the bootstrap `/32` on tcp/22, plus 80/443 when public sites are configured | `06-firewall` |
@@ -84,15 +84,7 @@ tz ls                 # per-directory tmux sessions
 
 Web previews: start a dev server on `127.0.0.1:9000-9009` inside the host, then open `http://<tailnet-ip>:<port>` from any device on the tailnet. HTTP is deliberate — the tailnet link is already WireGuard-encrypted, and Caddy cannot bind HTTP and HTTPS on the same port.
 
-The main HTTPS endpoint on 443 uses Caddy's internal CA. To trust it on the client:
-
-```bash
-ssh <name> 'sudo cat /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt' > caddy-root.crt
-# macOS
-sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain caddy-root.crt
-# Linux (Debian/Ubuntu)
-sudo cp caddy-root.crt /usr/local/share/ca-certificates/ && sudo update-ca-certificates
-```
+There is no HTTPS listener on the tailnet address, so there is no certificate to trust. Public sites configured through `caddy_public_sites` get real ACME certificates for their own domains.
 
 ## Security model
 
@@ -101,7 +93,7 @@ sudo cp caddy-root.crt /usr/local/share/ca-certificates/ && sudo update-ca-certi
 - **nftables/iptables order.** `tailscaled` installs its own `ts-input` chain ahead of the ufw chains and accepts everything arriving on `tailscale0`. So ufw governs **WAN** traffic only, and within the tailnet reachability is decided by **Tailscale ACLs**, not by ufw. Both facts are easy to get wrong; the playbook documents them rather than adding rules that do nothing.
 - **No WAN UDP range for mosh.** Only `udp/41641` (Tailscale direct connections, avoiding the DERP relay) is opened.
 - **Key-only login.** The instance is launched with your public key; password and keyboard-interactive auth are off, `sshd -t` validates every config change before reload, and fail2ban rate-limits the bootstrap window.
-- **Secrets never committed.** `.env`, `state/`, `ansible/inventory.ini`, `group_vars/all/local.yml`, `group_vars/all/secrets.yml` are gitignored; `secrets.yml` is written with mode 0600.
+- **Secrets never committed.** `.env`, `state/`, `ansible/inventory.ini`, `ansible/host_vars/`, `group_vars/all/secrets.yml` are gitignored; the two generated var files are written with mode 0600.
 
 ## Always Free: limits and traps
 
@@ -154,9 +146,8 @@ Frequently changed Ansible variables live in `ansible/group_vars/all/main.yml` (
 | Host unreachable after `--tailscale-only` | client not on the tailnet, or `ssh` still pointing at the old public IP | `tailscale up` on the client; check the `Host` block in `~/.ssh/config` |
 | `Could not resolve hostname <name>` | MagicDNS not enabled on the client | `tailscale set --accept-dns=true` (client) |
 | mosh connects then stalls, "broken pipe" | sessions relayed via DERP | confirm the NSG `udp/41641` rule (added by `provision.sh`) and that the client has direct connectivity |
-| Preview port returns 502 | nothing listening on that port on the host | start the dev server on `127.0.0.1:<port>`; check `caddy_listen` routes |
-| Browser rejects `https://<tailnet-ip>` | Caddy internal CA not trusted | install `caddy-root.crt` (see Access model) |
-| sudo asks for a password | image user without NOPASSWD | `ansible-playbook … --ask-become-pass`, or add `ansible_become_password` |
+| Preview port returns 502 | nothing listening on that port on the host | start the dev server on `127.0.0.1:<port>`; check `caddy_reverse_routes` in `ansible/group_vars/all/main.yml` holds that port |
+| `sudo` asks for a password | image user without NOPASSWD | `ansible-playbook … --ask-become-pass`, or add `ansible_become_password` |
 | `community.general` missing | collections not installed | `ansible-galaxy collection install community.general` (preflight does this) |
 | Root filesystem smaller than the volume | cloud-init growpart skipped | re-run `scripts/configure.sh`; the `storage` role grows it |
 
@@ -181,6 +172,7 @@ ansible/
   site.yml             role order + platform asserts
   ansible.cfg          pipelining, accept-new host keys, connection sharing
   group_vars/all/      main.yml (defaults) · secrets.yml.example
+  host_vars/<name>.yml   generated by configure.sh: operator values for this host
   roles/               common · storage · tailscale · sshd · fail2ban · firewall · mosh · caddy · tmux · verify
   files/ssh_config     client snippet appended by configure.sh
 state/devhost.env      generated: instance OCID, IPs, NSG/subnet ids (gitignored)
@@ -188,10 +180,10 @@ state/devhost.env      generated: instance OCID, IPs, NSG/subnet ids (gitignored
 
 ## What this fixes relative to the blueprint
 
-The blueprint ran `omp_verify`, pinned personal domains/IPs/OCIDs, and had three gaps that only show up on a clean host:
+The blueprint's verification suite ran personal hosts, pinned personal domains/IPs/OCIDs, and had three gaps that only show up on a clean host:
 
-1. **sshd hardening was verified but never applied.** `05-omp.sh` asserted `PermitRootLogin`/`PasswordAuthentication`, but no role wrote them — it passed only because the image happened to be hardened. New `sshd` role writes and validates the config.
+1. **sshd hardening was verified but never applied.** Its sshd test asserted `PermitRootLogin`/`PasswordAuthentication`, but no role wrote them — it passed only because the image happened to be hardened. New `sshd` role writes and validates the config.
 2. **fail2ban had no jail.** The package was installed, the service was checked, and nothing configured it. New `fail2ban` role adds the sshd jail.
 3. **The mosh "tailscale bind" was inert.** `/etc/systemd/system/mosh-server@.service.d/10-tailscale.conf` attached to a unit Ubuntu does not ship, and `MOSH_SERVER_NETWORK` is not a mosh variable. Binding comes from the mosh client (`--bind-server=ssh`, default), and the playbook now documents that and removes the stale drop-in.
 
-Also: the dedicated egress-only security list (the VCN default allows SSH from anywhere), a `storage` role for volume growth, a generic verification suite replacing the omp-specific one, `python3-apt` bootstrap for fresh cloud images, cloud-init wait before the first playbook run, and the personal Caddy sites (buzz/kipus/hobegami) replaced by a `caddy_public_sites` list.
+Also: the dedicated egress-only security list (the VCN default allows SSH from anywhere), a `storage` role for volume growth, a generic verification suite replacing the host-specific one, `python3-apt` bootstrap for fresh cloud images, cloud-init wait before the first playbook run, and the personal Caddy sites replaced by a `caddy_public_sites` list.

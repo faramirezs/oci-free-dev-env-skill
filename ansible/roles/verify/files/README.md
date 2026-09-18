@@ -18,7 +18,9 @@ bash ~/.devhost-verify/verify.sh 03 06        # several
 | 06-firewall | ufw active with default-deny incoming, no world-open tcp/22, fail2ban running with the sshd jail |
 | 07-storage | root filesystem usage under 80% and the partition spans the whole boot volume |
 
-Exit codes: `0` pass, `2` skip (not ready, e.g. Tailscale), anything else fail.
+Exit codes: `0` pass, `2` skip (not ready, e.g. Tailscale), anything else fail — per test. The
+harness itself exits `0` when no test failed and `1` otherwise, so a skipped test does not fail the
+run; read the `passed: … skipped: … failed: …` summary line.
 Logs land in `/var/log/devhost-verify/<test>.<timestamp>.log`.
 
 Add a test by dropping `tests/08-mycheck.sh` that exits 0 / 2 / non-zero; the

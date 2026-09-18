@@ -5,8 +5,10 @@
 #   tailscale before firewall/mosh/caddy (they consume tailscale_ip)
 #   sshd hardening after tailscale (so a tailnet path exists if the WAN path breaks)
 #
-# Variables come from group_vars/all/main.yml (defaults), group_vars/all/local.yml
-# (host-specific values rendered by scripts/configure.sh) and
+# Variables come from group_vars/all/main.yml (defaults), host_vars/<host>.yml
+# (host-specific values rendered by scripts/configure.sh — host vars, not a
+# group_vars file, because within a group_vars directory the last file in
+# lexicographic order wins and would override the rendered values) and
 # group_vars/all/secrets.yml (gitignored Tailscale auth key).
 
 - name: Provision devhost

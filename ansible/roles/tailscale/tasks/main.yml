@@ -79,7 +79,7 @@
   no_log: true
   when:
     - tailscale_auth_key | default('') | length > 0
-    - ts_backend_state != 'Running'
+    - ts_backend_state | default('') != 'Running'
 
 # Interactive path: no auth key. tailscale up prints a login URL, the CLI times
 # out, but tailscaled keeps waiting — opening the URL in a browser completes the
@@ -98,7 +98,7 @@
   failed_when: false
   when:
     - tailscale_auth_key | default('') | length == 0
-    - ts_backend_state != 'Running'
+    - ts_backend_state | default('') != 'Running'
 
 - name: Show the Tailscale login URL
   ansible.builtin.debug:
@@ -110,7 +110,7 @@
       `tailscale status` to report Running).
   when:
     - tailscale_auth_key | default('') | length == 0
-    - ts_backend_state != 'Running'
+    - ts_backend_state | default('') != 'Running'
 
 - name: Wait for the tailscale0 interface
   ansible.builtin.wait_for:
@@ -167,11 +167,8 @@
     - ts_run_ssh | default(false) | bool
   changed_when: true
 
-# Downstream roles consume tailscale_ip as a bind address.
-- name: Publish tailnet bind address to downstream roles
-  ansible.builtin.set_fact:
-    mosh_bind_ip: "{{ tailscale_ip }}"
-  when: tailscale_ip | default('') | length > 0
+# Downstream roles (caddy) consume tailscale_ip as a bind address; the fact is
+# set by "Read tailscale status" above.
 
 # tailscale0 shows up in ansible_interfaces only after a fresh fact gather;
 # the firewall role tests for it.

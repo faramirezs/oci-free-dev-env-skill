@@ -42,7 +42,15 @@ step() { printf "\n${blue}==>${reset} %s\n" "$1"; }
 OCI_BIN="${OCI_BIN:-$(command -v oci || true)}"
 [ -n "$OCI_BIN" ] || die "the OCI CLI is not on PATH"
 # shellcheck disable=SC2086
-oapi() { "$OCI_BIN" ${OCI_CLI_ARGS} "$@"; }
+oapi() {
+    # Same as provision.sh: name the region explicitly instead of relying on the
+    # region in ~/.oci/config, which may not be the one in state/devhost.env.
+    if [ -n "${REGION:-}" ]; then
+        "$OCI_BIN" ${OCI_CLI_ARGS} --region "$REGION" "$@"
+    else
+        "$OCI_BIN" ${OCI_CLI_ARGS} "$@"
+    fi
+}
 
 echo "devhost destroy — $DEVHOST_NAME"
 echo "  instance    : $INSTANCE_ID"
@@ -57,7 +65,18 @@ fi
 
 step "Terminating the instance"
 if [ -n "${INSTANCE_ID:-}" ]; then
-    state="$(oapi compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output 2>/dev/null || echo GONE)"
+    # A failed read must not look like "already gone": that would silently leave
+    # a running instance behind while this script reports success.
+    if state_out="$(oapi compute instance get --instance-id "$INSTANCE_ID" \
+                        --query 'data."lifecycle-state"' --raw-output 2>&1)"; then
+        state="$state_out"
+    else
+        case "$state_out" in
+            *NotFound*|*"not found"*) state="GONE" ;;
+            *)  printf '%s\n' "$state_out" | sed 's/^/     /'
+                die "could not read the instance state — nothing was deleted" ;;
+        esac
+    fi
     if [ "$state" = "GONE" ]; then
         ok "instance already gone"
     elif [ "$state" = "TERMINATED" ]; then
@@ -75,14 +94,33 @@ fi
 
 if [ "$DELETE_NETWORK" = "1" ]; then
     step "Deleting the network"
-    [ -n "${SUBNET_ID:-}" ] && { oapi network subnet delete --subnet-id "$SUBNET_ID" --force >/dev/null && ok "subnet deleted"; }
-    [ -n "${NSG_ID:-}" ] && { oapi network nsg delete --nsg-id "$NSG_ID" --force >/dev/null && ok "network security group deleted"; }
-    [ -n "${SECURITY_LIST_ID:-}" ] && { oapi network security-list delete --security-list-id "$SECURITY_LIST_ID" --force >/dev/null && ok "security list deleted"; }
-    [ -n "${IGW_ID:-}" ] && { oapi network internet-gateway delete --ig-id "$IGW_ID" --force >/dev/null && ok "internet gateway deleted"; }
+    # Every delete here is asynchronous and each resource refuses to go while
+    # something still references it (a subnet blocks its security list, an
+    # internet gateway blocks the route table, and the VCN blocks on everything).
+    # So: delete child first, wait for TERMINATED, then move up. Without the
+    # waits the calls race and the run stops half-way with a 409.
+    if [ -n "${NSG_ID:-}" ]; then
+        oapi network nsg delete --nsg-id "$NSG_ID" --force --wait-for-state TERMINATED >/dev/null
+        ok "network security group deleted"
+    fi
+    if [ -n "${SUBNET_ID:-}" ]; then
+        oapi network subnet delete --subnet-id "$SUBNET_ID" --force --wait-for-state TERMINATED >/dev/null
+        ok "subnet deleted"
+    fi
+    if [ -n "${SECURITY_LIST_ID:-}" ]; then
+        oapi network security-list delete --security-list-id "$SECURITY_LIST_ID" --force \
+            --wait-for-state TERMINATED >/dev/null
+        ok "security list deleted"
+    fi
+    if [ -n "${IGW_ID:-}" ]; then
+        oapi network internet-gateway delete --ig-id "$IGW_ID" --force --wait-for-state TERMINATED >/dev/null
+        ok "internet gateway deleted"
+    fi
     # The VCN owns its default route table and default security list, so they go
-    # with it.
+    # with it. It must be last: it refuses to go while it still has children.
     if [ -n "${VCN_ID:-}" ]; then
-        oapi network vcn delete --vcn-id "$VCN_ID" --force >/dev/null && ok "VCN deleted"
+        oapi network vcn delete --vcn-id "$VCN_ID" --force --wait-for-state TERMINATED >/dev/null
+        ok "VCN deleted"
     fi
 else
     warn "network left in place (VCN, subnet, NSG): run scripts/destroy.sh --all to remove it"

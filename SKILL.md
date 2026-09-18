@@ -70,7 +70,7 @@ Creates or reuses by display name: VCN, internet gateway, default-route-table ro
 scripts/configure.sh
 ```
 
-Renders `ansible/inventory.ini` plus `group_vars/all/local.yml` and `secrets.yml` (0600) from `.env` and the state file, waits for SSH (300 s budget), then runs `site.yml`. Roles and what they guarantee are listed in `README.md`.
+Renders `ansible/inventory.ini`, `ansible/host_vars/<name>.yml` (0600) and `group_vars/all/secrets.yml` (0600) from `.env` and the state file, waits for SSH (300 s budget), then runs `site.yml`. Host vars are used deliberately: inside a `group_vars` directory Ansible loads files in lexicographic order and the last one wins, so a generated `local.yml` would be overridden by `main.yml`. Roles and what they guarantee are listed in `README.md`.
 
 - The bootstrap run reaches the host over the public IP with the `/32` rule. `ssh_wan_allow` therefore contains that `/32` and the playbook writes a `tcp/22` ufw rule for it — that is expected at this stage, not a finding.
 - **If no Tailscale auth key was configured**, the playbook prints a `https://login.tailscale.com/...` URL and the host stays unauthenticated. Give the URL to the user, wait for them to open it, then continue. Verify with `ssh <host> tailscale status | head -1` or re-run `scripts/configure.sh`.
@@ -92,7 +92,7 @@ The cloud **NSG** rule for `tcp/22` is not touched by the playbook: ufw already 
 scripts/verify.sh
 ```
 
-`ansible-playbook --syntax-check`, then the playbook, then on-host `~/.devhost-verify/verify.sh` (7 tests: Tailscale, mosh, Caddy headers, tmux persistence, effective `sshd -T` hardening, ufw + fail2ban, storage). Exit 2 means SKIP, and only a skip on `01-tailscale` or `03-caddy` is acceptable before the Tailscale cutover.
+`ansible-playbook --syntax-check`, then the playbook, then on-host `~/.devhost-verify/verify.sh` (7 tests: Tailscale, mosh, Caddy headers, tmux persistence, effective `sshd -T` hardening, ufw + fail2ban, storage). The suite exits 0 when nothing failed and 1 otherwise — a skipped test prints in the summary line but does **not** fail the run. Before the Tailscale cutover the only expected skips are `01-tailscale` and `03-caddy`. Any other skip (`05-sshd` / `06-firewall` skip when passwordless sudo is unavailable) means the test could not see the system: fix the cause, do not report success.
 
 Also prove reachability yourself before reporting success:
 
