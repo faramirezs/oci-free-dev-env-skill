@@ -1,0 +1,79 @@
+---
+# ufw guards the WAN interface, not the tailnet.
+#
+# ORDER MATTERS: allow rules first (they persist while ufw is inactive), then
+# default policies, then enable. Anything else risks locking the current SSH
+# session out mid-play.
+#
+# Tailnet traffic never reaches these rules: tailscaled inserts its own
+# `ts-input` chain ahead of the ufw chains and accepts everything arriving on
+# tailscale0 (verified on Ubuntu 22.04). SSH, mosh and Caddy are therefore
+# reachable over the tailnet regardless of ufw, and reachability inside the
+# tailnet is controlled by Tailscale ACLs.
+
+- name: Remove bootstrap SSH rules that are no longer allowed
+  # Must run before the allow loop below. Deleting a rule that is not present is
+  # a no-op (ufw reports "rule not found" and the module still reports ok), so
+  # this stays idempotent on every later run.
+  community.general.ufw:
+    rule: allow
+    src: "{{ item }}"
+    port: "22"
+    proto: tcp
+    delete: true
+  loop: "{{ ssh_wan_allow_remove | default([]) }}"
+
+- name: Allow SSH from bootstrap WAN addresses
+  community.general.ufw:
+    rule: allow
+    src: "{{ item }}"
+    port: "22"
+    proto: tcp
+    comment: "bootstrap SSH from {{ item }}"
+  loop: "{{ ssh_wan_allow }}"
+
+- name: Allow public HTTP
+  community.general.ufw:
+    rule: allow
+    port: "80"
+    proto: tcp
+    comment: "Caddy HTTP (public sites)"
+  when: expose_public_http | default(false) | bool
+
+- name: Allow public HTTPS
+  community.general.ufw:
+    rule: allow
+    port: "443"
+    proto: tcp
+    comment: "Caddy HTTPS (public sites)"
+  when: expose_public_https | default(false) | bool
+
+- name: Set default incoming policy to deny
+  community.general.ufw:
+    direction: incoming
+    policy: deny
+
+- name: Set default outgoing policy to allow
+  community.general.ufw:
+    direction: outgoing
+    policy: allow
+
+- name: Set default routed policy to deny
+  community.general.ufw:
+    direction: routed
+    policy: deny
+
+- name: Enable ufw
+  community.general.ufw:
+    state: enabled
+    logging: low
+
+- name: Read ufw status
+  ansible.builtin.command:
+    cmd: ufw status verbose
+  register: ufw_status
+  changed_when: false
+
+- name: Show ufw status
+  ansible.builtin.debug:
+    var: ufw_status.stdout_lines

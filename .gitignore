@@ -1,0 +1,12 @@
+# Local configuration and provisioned state (never commit)
+.env
+state/
+ansible/inventory.ini
+ansible/group_vars/all/local.yml
+ansible/group_vars/all/secrets.yml
+
+# Runtime junk
+*.retry
+*.log
+.DS_Store
+caddy-root.crt

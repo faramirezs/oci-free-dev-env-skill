@@ -1,0 +1,9 @@
+---
+caddy_repo_keyring: "/usr/share/keyrings/caddy-stable-archive-keyring.gpg"
+caddy_repo_list: "/etc/apt/sources.list.d/caddy-stable.list"
+caddy_config_dir: "/etc/caddy"
+caddy_data_dir: "/var/lib/caddy"
+caddy_log_dir: "/var/log/caddy"
+caddy_admin_port: 2019
+caddy_systemd_limit_no: "65536"
+caddy_systemd_limit_nproc: "4096"

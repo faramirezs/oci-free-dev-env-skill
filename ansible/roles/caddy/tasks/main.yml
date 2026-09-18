@@ -1,0 +1,111 @@
+---
+# Caddy is the tailnet ingress: it turns 127.0.0.1:9000-9009 on the host into
+# http://<tailnet-ip>:9000-9009 for every device on the tailnet, so a dev server
+# bound to loopback is reachable from a browser without opening the WAN.
+# (Widen caddy_reverse_routes to proxy more ports.)
+#
+# Plain HTTP is deliberate: Tailscale (WireGuard) already encrypts the transit.
+# Public sites, when configured, get automatic Let's Encrypt TLS.
+
+- name: Add Caddy GPG key
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --yes --dearmor -o "{{ caddy_repo_keyring }}"
+      chmod 0644 "{{ caddy_repo_keyring }}"
+    executable: /bin/bash
+  args:
+    creates: "{{ caddy_repo_keyring }}"
+
+- name: Add Caddy apt repository
+  ansible.builtin.copy:
+    dest: "{{ caddy_repo_list }}"
+    content: |
+      deb [signed-by={{ caddy_repo_keyring }}] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main
+    mode: "0644"
+
+- name: Install caddy
+  ansible.builtin.apt:
+    name: caddy
+    state: present
+    update_cache: true
+
+- name: Create Caddy directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ caddy_config_dir }}", owner: root, group: caddy, mode: "0750" }
+    - { path: "{{ caddy_data_dir }}", owner: caddy, group: caddy, mode: "0750" }
+    - { path: "{{ caddy_log_dir }}", owner: caddy, group: caddy, mode: "0750" }
+
+- name: Deploy the Caddyfile
+  ansible.builtin.template:
+    src: Caddyfile.j2
+    dest: "{{ caddy_config_dir }}/Caddyfile"
+    owner: root
+    group: caddy
+    mode: "0640"
+  notify: Reload caddy
+  when: tailscale_ip | default('') | length > 0
+
+- name: Explain a skipped Caddyfile when Tailscale is not up yet
+  ansible.builtin.debug:
+    msg: >-
+      Tailscale is not authenticated, so the tailnet Caddyfile was not deployed;
+      Caddy keeps its stock configuration. Authenticate (see the tailscale
+      role output) and re-run the playbook.
+  when: tailscale_ip | default('') | length == 0
+
+- name: Create systemd drop-in directory for caddy
+  ansible.builtin.file:
+    path: /etc/systemd/system/caddy.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Set systemd limits for caddy
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/caddy.service.d/10-limits.conf
+    content: |
+      [Service]
+      LimitNOFILE={{ caddy_systemd_limit_no }}
+      LimitNPROC={{ caddy_systemd_limit_nproc }}
+    mode: "0644"
+  notify: Reload systemd
+
+# Caddy binds the tailnet address, which does not exist until tailscaled is up.
+# Without ordering it races tailscaled at boot and dies with
+# "listen tcp <ip>: bind: cannot assign".
+- name: Wait for Tailscale before binding the tailnet address
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/caddy.service.d/10-tailscale-wait.conf
+    content: |
+      [Unit]
+      After=tailscaled.service network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Restart=on-failure
+      RestartSec=3
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Enable and start caddy
+  ansible.builtin.service:
+    name: caddy
+    state: started
+    enabled: true
+
+- name: Wait for the tailnet HTTP endpoint
+  ansible.builtin.wait_for:
+    port: 80
+    host: "{{ tailscale_ip }}"
+    timeout: 30
+  when: tailscale_ip | default('') | length > 0
+  failed_when: false

@@ -1,0 +1,130 @@
+---
+# tmux is why a dropped SSH connection does not lose work: every interactive
+# login attaches to the `main` session, which keeps running on the host.
+
+- name: Ensure tmux and fzf are installed
+  ansible.builtin.apt:
+    name:
+      - tmux
+      - fzf
+    state: present
+
+- name: Create tmux config directory
+  ansible.builtin.file:
+    path: "/home/{{ item }}/.tmux"
+    state: directory
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0755"
+  loop: "{{ target_users }}"
+
+- name: Deploy tmux config
+  ansible.builtin.copy:
+    dest: "/home/{{ item }}/.tmux.conf"
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0644"
+    content: |
+      # devhost tmux config
+
+      set -g default-terminal "tmux-256color"
+      set -ga terminal-overrides ",xterm-256color:RGB"
+      set -g terminal-features "extflags:crc"
+
+      # History
+      set -g history-limit 100000
+      set -g buffer-limit 50
+
+      # Prefix
+      set -g prefix C-a
+      unbind C-b
+      bind C-a send-prefix
+
+      # Mouse
+      set -g mouse on
+
+      # Vi mode for copy
+      setw -g mode-keys vi
+
+      # OSC 52 clipboard passthrough
+      set -g set-clipboard on
+
+      # Idle session lock
+      set -g lock-after-time {{ tmux_idle_timeout_hours * 3600 }}
+      set -g lock-command "tmux lock-session"
+      set -g default-shell "/bin/bash"
+
+      # Sessions
+      bind r source-file ~/.tmux.conf \; display "tmux reloaded"
+      bind | split-window -h
+      bind - split-window -v
+      bind h select-pane -L
+      bind j select-pane -D
+      bind k select-pane -U
+      bind l select-pane -R
+  loop: "{{ target_users }}"
+
+- name: Auto-attach tmux on SSH login
+  ansible.builtin.blockinfile:
+    path: "/home/{{ item }}/.bashrc"
+    marker: "# {mark} ANSIBLE MANAGED tmux auto-attach"
+    block: |
+      # Attach tmux for interactive SSH shells, but not for scp/rsync/commands
+      # (`ssh host cmd` is non-interactive and skips .bashrc), and not inside
+      # editor terminals that set their own variables.
+      if [ -z "$TMUX" ] && [ -n "$SSH_CONNECTION" ] && [ -z "$ZED_TERM" ] && [ -z "$TERM_PROGRAM" ]; then
+          if tmux has-session -t {{ tmux_default_session }} 2>/dev/null; then
+              exec tmux attach -t {{ tmux_default_session }}
+          else
+              exec tmux new -s {{ tmux_default_session }}
+          fi
+      fi
+  loop: "{{ target_users }}"
+
+- name: Install the tz session helper
+  ansible.builtin.copy:
+    src: tz
+    dest: "/usr/local/bin/tz"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ensure per-user ~/.local/bin exists
+  ansible.builtin.file:
+    path: "/home/{{ item }}/.local/bin"
+    state: directory
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0755"
+  loop: "{{ target_users }}"
+
+- name: Install the tz session helper for editor terminals
+  ansible.builtin.copy:
+    src: tz
+    dest: "/home/{{ item }}/.local/bin/tz"
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0755"
+  loop: "{{ target_users }}"
+
+# Linger keeps user services and the tmux server alive after logout.
+- name: Enable systemd lingering
+  ansible.builtin.command:
+    cmd: "loginctl enable-linger {{ item }}"
+  loop: "{{ target_users }}"
+  changed_when: false
+
+- name: Ensure the tmux socket directory permissions
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      uid_val=$(id -u "{{ item }}")
+      sock_dir="/tmp/tmux-${uid_val}"
+      if [ -d "$sock_dir" ]; then
+          chmod {{ tmux_socket_perms }} "$sock_dir"
+          chown "{{ item }}:{{ item }}" "$sock_dir"
+      fi
+    executable: /bin/bash
+  loop: "{{ target_users }}"
+  changed_when: false
+  failed_when: false

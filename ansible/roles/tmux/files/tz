@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# tz — per-directory tmux sessions.
+#
+#   tz [name]   attach to (or create) the session for this directory
+#   tz new      start a fresh unnamed session
+#   tz ls       list sessions
+#   tz pick     pick a session with fzf
+#   tz k [name] kill a session (numbered picker without a name)
+#
+# Inside tmux it switches the client; outside it attaches.
+set -euo pipefail
+
+sanitize() {
+  local n="${1//./-}"; n="${n//:/-}"
+  printf '%s' "${n:-zed}"
+}
+
+go() {
+  local target="$1"
+  if [ -n "${TMUX:-}" ]; then
+    exec tmux switch-client -t "$target"
+  else
+    exec tmux attach -t "$target"
+  fi
+}
+
+case "${1:-auto}" in
+  auto)
+    session="zed-$(sanitize "$(basename "$PWD")")"
+    tmux has-session -t "$session" 2>/dev/null || TMUX= tmux new-session -d -s "$session"
+    go "$session"
+    ;;
+  new)
+    if [ -n "${TMUX:-}" ]; then
+      exec tmux switch-client -t "$(TMUX= tmux new-session -dP)"
+    else
+      exec tmux new-session
+    fi
+    ;;
+  ls)
+    tmux list-sessions -F '#{session_name} (#{session_windows}w, #{?session_attached,attached,detached})'
+    ;;
+  pick)
+    sel="$(tmux list-sessions -F '#S' | fzf --prompt='tmux session> ' || true)"
+    [ -n "$sel" ] && go "$sel"
+    ;;
+  k)
+    if [ $# -ge 2 ]; then
+      if tmux has-session -t "$2" 2>/dev/null; then
+        tmux kill-session -t "$2"
+        echo "killed session: $2"
+      else
+        echo "No such session: $2" >&2
+        exit 1
+      fi
+    else
+      mapfile -t names < <(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)
+      if [ "${#names[@]}" -eq 0 ]; then
+        echo "No tmux sessions."
+        exit 0
+      fi
+      mapfile -t rows < <(tmux list-sessions -F '#{session_name} (#{session_windows}w, #{?session_attached,attached,detached})')
+      echo "Sessions:"
+      for i in "${!names[@]}"; do
+        printf '  %2d) %s\n' "$((i + 1))" "${rows[$i]}"
+      done
+      printf 'Select session to kill [1-%d, 0 = cancel]: ' "${#names[@]}"
+      read -r sel
+      if [ "$sel" = "0" ]; then
+        echo "cancelled."
+        exit 0
+      fi
+      if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#names[@]}" ]; then
+        tmux kill-session -t "${names[$((sel - 1))]}"
+        echo "killed session: ${names[$((sel - 1))]}"
+      else
+        echo "Invalid selection." >&2
+        exit 1
+      fi
+    fi
+    ;;
+  *)
+    session="$(sanitize "$1")"
+    tmux has-session -t "$session" 2>/dev/null || TMUX= tmux new-session -d -s "$session"
+    go "$session"
+    ;;
+esac

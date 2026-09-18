@@ -1,0 +1,85 @@
+---
+# Grow the root partition/filesystem to fill the boot volume.
+#
+# scripts/provision.sh already requests the final boot volume size at launch,
+# and cloud-init grows the filesystem on first boot. This role exists for the
+# other case: the boot volume was enlarged later (`oci bv boot-volume update`)
+# or cloud-init's growpart did not run. Safe to re-run: when the partition
+# already spans the disk, nothing changes.
+
+- name: Locate root disk and partition
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      part=$(findmnt -no SOURCE /)
+      disk="/dev/$(lsblk -no PKNAME "$part" | head -1)"
+      printf '%s %s\n' "$disk" "$part"
+  register: root_dev
+  changed_when: false
+  when: grow_root_filesystem | bool
+
+- name: Compare partition size with disk size
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      set -- {{ root_dev.stdout }}
+      disk_bytes=$(lsblk -bndo SIZE "$1")
+      part_bytes=$(lsblk -bndo SIZE "$2")
+      if [ "$part_bytes" -lt "$disk_bytes" ]; then echo NEED_GROW; else echo OK; fi
+  register: grow_check
+  changed_when: false
+  when: grow_root_filesystem | bool
+
+- name: "Point facts at the root disk, partition and partition number"
+  ansible.builtin.set_fact:
+    root_disk: "{{ root_dev.stdout.split()[0] }}"
+    root_partition: "{{ root_dev.stdout.split()[1] }}"
+    root_partnum: "{{ root_dev.stdout.split()[1] | regex_search('[0-9]+$') }}"
+  when:
+    - grow_root_filesystem | bool
+    - root_dev.stdout | default('') | length > 0
+
+- name: Grow root partition
+  ansible.builtin.command:
+    # growpart exits 1 with NOCHANGE when there is nothing to do.
+    cmd: "growpart {{ root_disk }} {{ root_partnum }}"
+  register: growpart_out
+  changed_when: growpart_out.rc == 0
+  failed_when: growpart_out.rc not in [0, 1]
+  when:
+    - grow_root_filesystem | bool
+    - grow_check.stdout | default('') == 'NEED_GROW'
+
+- name: Detect root filesystem type
+  ansible.builtin.command:
+    cmd: "blkid -o value -s TYPE {{ root_partition }}"
+  register: root_fstype
+  changed_when: false
+  failed_when: false
+  when:
+    - grow_root_filesystem | bool
+    - grow_check.stdout | default('') == 'NEED_GROW'
+
+- name: Grow ext filesystem
+  ansible.builtin.command:
+    cmd: "resize2fs {{ root_partition }}"
+  register: resize2fs_out
+  changed_when: true
+  when: root_fstype.stdout | default('') in ['ext2', 'ext3', 'ext4']
+
+- name: Grow XFS filesystem
+  ansible.builtin.command:
+    cmd: "xfs_growfs /"
+  register: xfs_out
+  changed_when: true
+  when: root_fstype.stdout | default('') == 'xfs'
+
+- name: Report unsupported filesystem
+  ansible.builtin.debug:
+    msg: >-
+      Root filesystem type '{{ root_fstype.stdout | default('unknown') }}' is not
+      grown automatically. Grow it by hand, or recreate the instance with a
+      larger boot volume.
+  when:
+    - grow_check.stdout | default('') == 'NEED_GROW'
+    - root_fstype.stdout | default('') not in ['ext2', 'ext3', 'ext4', 'xfs']

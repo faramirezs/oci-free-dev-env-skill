@@ -1,0 +1,76 @@
+---
+# devhost — hardened Ubuntu remote development host (Oracle Cloud Always Free).
+#
+# Idempotent: re-running is safe. Role order is a dependency order:
+#   tailscale before firewall/mosh/caddy (they consume tailscale_ip)
+#   sshd hardening after tailscale (so a tailnet path exists if the WAN path breaks)
+#
+# Variables come from group_vars/all/main.yml (defaults), group_vars/all/local.yml
+# (host-specific values rendered by scripts/configure.sh) and
+# group_vars/all/secrets.yml (gitignored Tailscale auth key).
+
+- name: Provision devhost
+  hosts: devhost
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    # A freshly launched instance is still running cloud-init, which holds the
+    # dpkg/apt locks. Waiting here is what makes a first-boot run reliable.
+    - name: Wait for cloud-init to finish
+      ansible.builtin.raw: cloud-init status --wait
+      changed_when: false
+      failed_when: false
+
+    # Ubuntu cloud images ship python3, but not always python3-apt, which the
+    # apt module needs. Install it with raw (the only module that works yet).
+    - name: Check for python3-apt
+      ansible.builtin.stat:
+        path: /usr/lib/python3/dist-packages/apt/__init__.py
+      register: python3_apt
+
+    - name: Install python3-apt when missing
+      ansible.builtin.raw: DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-apt
+      when: not python3_apt.stat.exists
+      changed_when: true
+
+    - name: Assert supported platform
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == 'Ubuntu'
+          - ansible_distribution_version is version(required_ubuntu_version, '==')
+        fail_msg: >-
+          This playbook targets Ubuntu {{ required_ubuntu_version }}.
+          Found {{ ansible_distribution }} {{ ansible_distribution_version }}.
+          Change required_ubuntu_version only after checking the role defaults.
+
+  roles:
+    - role: common
+      tags: [common, base]
+    - role: storage
+      tags: [storage, disk]
+    - role: tailscale
+      tags: [tailscale, network]
+    - role: sshd
+      tags: [sshd, security]
+    - role: fail2ban
+      tags: [fail2ban, security]
+    - role: firewall
+      tags: [firewall, ufw]
+    - role: mosh
+      tags: [mosh, shell]
+    - role: caddy
+      tags: [caddy, ingress]
+    - role: tmux
+      tags: [tmux, sessions]
+    - role: verify
+      tags: [verify]
+
+  post_tasks:
+    - name: Summary
+      ansible.builtin.debug:
+        msg: |
+          devhost provisioned: {{ devhost_name }}
+          Tailscale IP: {{ tailscale_ip | default('not authenticated yet') }}
+          Verify suite: bash ~/.devhost-verify/verify.sh  (on the host)
+          Client side:   scripts/verify.sh                (from this repo)

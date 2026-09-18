@@ -1,0 +1,4 @@
+---
+tmux_default_session: "main"
+tmux_idle_timeout_hours: 24
+tmux_socket_perms: "0700"

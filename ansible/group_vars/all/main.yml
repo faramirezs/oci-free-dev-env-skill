@@ -1,0 +1,91 @@
+---
+# devhost — defaults. Host-specific values are rendered into
+# group_vars/all/local.yml by scripts/configure.sh; secrets live in
+# group_vars/all/secrets.yml (gitignored).
+
+# --- Identity -------------------------------------------------------------
+devhost_name: "devhost-1"
+ssh_user: "ubuntu"
+target_users:
+  - "{{ ssh_user }}"
+timezone: "Etc/UTC"
+
+# --- Platform -------------------------------------------------------------
+required_ubuntu_version: "22.04"
+
+# --- Tailscale ------------------------------------------------------------
+tailscale_hostname: "{{ devhost_name }}"
+tailscale_interface: "tailscale0"
+tailscale_accept_routes: false
+tailscale_accept_dns: true
+tailscale_exit_node: false
+tailscale_advertise_routes: ""
+# Tailscale SSH: also accept `tailscale ssh <user>@<host>`, authenticated by
+# tailnet identity instead of the SSH key. Plain sshd keeps working either way.
+tailscale_ssh: true
+# Lets the login user run `tailscale set` without sudo.
+tailscale_operator: "{{ ssh_user }}"
+# tailscale_auth_key is in secrets.yml. Without it the role prints a login URL
+# instead, and verify test 01 reports the host as not-yet-authenticated.
+
+# --- SSH ------------------------------------------------------------------
+# "prohibit-password" keeps console/rescue root login with a key, blocks
+# password root login. The instance is always launched with an authorized key.
+ssh_permit_root_login: "prohibit-password"
+ssh_password_authentication: "no"
+ssh_allow_users: []          # empty = no AllowUsers directive
+# CIDRs allowed to reach tcp/22 from the internet. Rendered by configure.sh:
+# the operator's /32 while bootstrapping, [] after `--tailscale-only`.
+# Not a security boundary by itself — the cloud NSG must also allow it.
+ssh_wan_allow: []
+# CIDRs whose ufw rule must be deleted. The ufw module adds rules, it never
+# removes them, so closing the WAN path means naming the old rule here.
+# configure.sh fills this with the bootstrap /32 once the transport is the
+# tailnet; deleting an absent rule is a no-op, so re-runs stay clean.
+ssh_wan_allow_remove: []
+
+# --- Firewall (ufw) -------------------------------------------------------
+# ufw filters WAN traffic only: tailscaled installs its own `ts-input` chain
+# ahead of ufw, which accepts everything arriving on tailscale0. Tailnet
+# reachability is governed by Tailscale ACLs, not by these rules.
+expose_public_http: false
+expose_public_https: false
+
+# --- Mosh -----------------------------------------------------------------
+# No port range is opened to the WAN: mosh runs over the tailnet, and the mosh
+# client's default --bind-server=ssh makes mosh-server reply from the tailnet
+# address the SSH connection arrived on.
+mosh_server_network_timeout: 604800   # seconds without a client update before exit
+
+# --- Caddy (tailnet ingress) ---------------------------------------------
+# Terminates HTTP on the tailnet so ports 9000-9099 answer as soon as the
+# upstream dev server starts. HTTP is fine there: Tailscale (WireGuard)
+# encrypts the transit.
+caddy_listen_tailscale_only: true
+caddy_reverse_routes:
+  - 9000
+  - 9001
+  - 9002
+  - 9003
+  - 9004
+  - 9005
+  - 9006
+  - 9007
+  - 9008
+  - 9009
+# Public HTTPS sites: [{domain: app.example.com, upstream: "127.0.0.1:3000", websocket: false, acme_email: you@example.com}]
+# Requires DNS pointing at the instance public IP, expose_public_http/https true,
+# and NSG ingress 80/443 from 0.0.0.0/0.
+caddy_public_sites: []
+
+# --- Storage --------------------------------------------------------------
+# Boot volume is created at the requested size by scripts/provision.sh; this
+# only grows the partition/filesystem if the volume was enlarged afterwards.
+grow_root_filesystem: true
+
+# --- Housekeeping ---------------------------------------------------------
+unattended_upgrades_enabled: true
+
+# --- Verify suite ---------------------------------------------------------
+verify_dir: "/home/{{ ssh_user }}/.devhost-verify"
+verify_log_dir: "/var/log/devhost-verify"

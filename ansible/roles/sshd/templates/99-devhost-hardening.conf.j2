@@ -1,0 +1,18 @@
+Port 22
+Protocol 2
+PermitRootLogin {{ ssh_permit_root_login }}
+PasswordAuthentication {{ ssh_password_authentication }}
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+PermitEmptyPasswords no
+PubkeyAuthentication yes
+X11Forwarding no
+AllowAgentForwarding yes
+MaxAuthTries 4
+MaxSessions 10
+LoginGraceTime 30
+ClientAliveInterval 60
+ClientAliveCountMax 3
+{% if ssh_allow_users | length > 0 %}
+AllowUsers {{ ssh_allow_users | join(' ') }}
+{% endif %}

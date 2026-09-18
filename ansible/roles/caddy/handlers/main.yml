@@ -1,0 +1,9 @@
+---
+- name: Reload caddy
+  ansible.builtin.service:
+    name: caddy
+    state: reloaded
+
+- name: Reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true

@@ -1,0 +1,57 @@
+---
+# SSH hardening as a drop-in file. /etc/ssh/sshd_config.d/*.conf is included by
+# the stock Ubuntu sshd_config; 99- sorts last, so this wins over
+# 50-cloud-init.conf / 60-cloudimg-settings.conf shipped by cloud images.
+
+- name: Ensure sshd drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Check that sshd_config includes the drop-in directory
+  ansible.builtin.command:
+    cmd: "grep -q '^Include /etc/ssh/sshd_config.d/' /etc/ssh/sshd_config"
+  register: sshd_include
+  changed_when: false
+  failed_when: false
+
+- name: Fail when the drop-in directory would be ignored
+  ansible.builtin.assert:
+    that:
+      - sshd_include.rc == 0
+    fail_msg: >-
+      /etc/ssh/sshd_config does not include /etc/ssh/sshd_config.d/*.conf, so the
+      hardening drop-in would have no effect. Add the Include line, or set these
+      values in /etc/ssh/sshd_config directly.
+
+- name: Deploy sshd hardening drop-in
+  ansible.builtin.template:
+    src: 99-devhost-hardening.conf.j2
+    dest: /etc/ssh/sshd_config.d/99-devhost-hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+    # sshd -t refuses to restart with a config it cannot parse, so a bad
+    # template can never lock the host out.
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Restart sshd
+
+- name: Read the effective sshd configuration
+  ansible.builtin.command:
+    cmd: sshd -T
+  register: sshd_effective
+  changed_when: false
+
+- name: Assert the hardening is effective
+  ansible.builtin.assert:
+    that:
+      - sshd_effective.stdout is search('(?m)^permitrootlogin ' + ssh_permit_root_login + '$')
+      - sshd_effective.stdout is search('(?m)^passwordauthentication no$')
+      - sshd_effective.stdout is search('(?m)^kbdinteractiveauthentication no$')
+    fail_msg: >-
+      Effective sshd config does not match the intended hardening. Check for a
+      later-sorting drop-in in /etc/ssh/sshd_config.d/ or an override in
+      /etc/ssh/sshd_config.

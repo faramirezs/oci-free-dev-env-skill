@@ -1,0 +1,10 @@
+---
+# fail2ban with a single sshd jail. The point is rate-limiting password and
+# username guessing on tcp/22 while the bootstrap rule is open; once the host is
+# Tailscale-only, tcp/22 is not reachable from the internet at all.
+fail2ban_bantime: "1h"
+fail2ban_findtime: "10m"
+fail2ban_maxretry: 5
+# Tailscale hands out 100.64.0.0/10 (CGNAT). Never ban the tailnet: a client
+# with a stale key or a typo must not lock itself out of the only path in.
+fail2ban_ignore_tailnet: true

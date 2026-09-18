@@ -1,0 +1,57 @@
+{
+	admin localhost:{{ caddy_admin_port }}
+	log {
+		output file "{{ caddy_log_dir }}/caddy.log" {
+			roll_size 10MiB
+			roll_keep 5
+		}
+		level INFO
+	}
+}
+
+{% set bind_addr = tailscale_ip if caddy_listen_tailscale_only | bool else '0.0.0.0' %}
+
+# Health endpoint
+http://{{ bind_addr }} {
+	bind {{ bind_addr }}
+	respond "devhost caddy OK" 200
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+}
+
+# Preview ports: start a dev server on 127.0.0.1:<port> and open
+# http://<tailnet-ip>:<port>. HTTP only — the tailnet link is already encrypted,
+# and Caddy cannot bind http and https on the same port.
+{% for port in caddy_reverse_routes %}
+http://{{ bind_addr }}:{{ port }} {
+	bind {{ bind_addr }}
+	reverse_proxy 127.0.0.1:{{ port }}
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "no-referrer"
+	}
+}
+{% endfor %}
+
+{% for site in caddy_public_sites %}
+# Public site: {{ site.domain }} -> {{ site.upstream }}
+{{ site.domain }} {
+	encode zstd gzip
+	reverse_proxy {{ site.upstream }}
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+}
+
+http://{{ site.domain }} {
+	redir https://{{ site.domain }}{uri} permanent
+}
+{% endfor %}

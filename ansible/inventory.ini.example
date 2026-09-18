@@ -1,0 +1,12 @@
+# Rendered by scripts/configure.sh from .env + state/devhost.env. Do not edit by
+# hand: edit .env and re-run. This example documents the shape only.
+#
+# ansible_host is the public IP during bootstrap, then the Tailscale MagicDNS
+# name once the host has joined the tailnet (configure.sh picks automatically).
+
+[devhost]
+devhost-1 ansible_host=203.0.113.10 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_ed25519
+
+[devhost:vars]
+ansible_python_interpreter=/usr/bin/python3
+ansible_ssh_common_args=-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10

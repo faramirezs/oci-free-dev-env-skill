@@ -1,0 +1,41 @@
+---
+# Base packages every devhost gets. Role-specific packages are installed by
+# their own roles (tailscale, caddy, mosh).
+base_packages:
+  - ca-certificates
+  - curl
+  - wget
+  - git
+  - unzip
+  - zip
+  - jq
+  - rsync
+  - tmux
+  - fzf
+  - ripgrep
+  - fd-find
+  - build-essential
+  - pkg-config
+  - make
+  - python3
+  - python3-pip
+  - python3-venv
+  - python3-systemd
+  - cloud-guest-utils
+  - fail2ban
+  - ufw
+  - unattended-upgrades
+  - apt-listchanges
+  - cron
+  - htop
+  - iotop
+  - ncdu
+  - tree
+  - vim
+  - less
+  - socat
+  - dnsutils
+  - net-tools
+  - lsof
+  - strace
+  - libcap2-bin

@@ -1,0 +1,39 @@
+---
+# On-host verification suite. Every claim the README makes about the host has a
+# test here, and each test runs against the live system (not the config file).
+
+- name: Create the verify directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ verify_owner }}"
+    group: "{{ verify_owner }}"
+    mode: "0755"
+  loop:
+    - "{{ verify_dir }}"
+    - "{{ verify_log_dir }}"
+
+- name: Deploy the verify harness
+  ansible.builtin.copy:
+    src: verify.sh
+    dest: "{{ verify_dir }}/verify.sh"
+    owner: "{{ verify_owner }}"
+    group: "{{ verify_owner }}"
+    mode: "0755"
+
+- name: Deploy the test suite
+  ansible.builtin.copy:
+    src: tests/
+    dest: "{{ verify_dir }}/tests/"
+    owner: "{{ verify_owner }}"
+    group: "{{ verify_owner }}"
+    mode: "0755"
+    directory_mode: "0755"
+
+- name: Deploy the verify README
+  ansible.builtin.copy:
+    src: README.md
+    dest: "{{ verify_dir }}/README.md"
+    owner: "{{ verify_owner }}"
+    group: "{{ verify_owner }}"
+    mode: "0644"

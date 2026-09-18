@@ -1,0 +1,180 @@
+---
+# Tailscale is the primary access path: the instance ends up reachable over the
+# tailnet only, with MagicDNS (`ssh <name>`) and mosh working from any device on
+# the tailnet.
+
+- name: Add Tailscale GPG key
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL "{{ tailscale_install_url }}" | gpg --yes --dearmor -o "{{ tailscale_repo_keyring }}"
+      chmod 0644 "{{ tailscale_repo_keyring }}"
+    executable: /bin/bash
+  args:
+    creates: "{{ tailscale_repo_keyring }}"
+
+- name: Add Tailscale apt repository
+  ansible.builtin.copy:
+    dest: "{{ tailscale_repo_list }}"
+    content: |
+      deb [signed-by={{ tailscale_repo_keyring }}] https://pkgs.tailscale.com/stable/ubuntu {{ tailscale_repo_distro }} main
+    mode: "0644"
+
+- name: Install tailscale
+  ansible.builtin.apt:
+    name: tailscale
+    state: present
+    update_cache: true
+
+- name: Enable and start tailscaled
+  ansible.builtin.service:
+    name: tailscaled
+    state: started
+    enabled: true
+
+# --- Current state --------------------------------------------------------
+# Parse the JSON, never string-match it: Go emits `"BackendState": "Running"`
+# with a space after the colon, so a no-space grep never matches and the up
+# command re-runs on every play, silently clobbering manually-set prefs.
+- name: Read tailscale status
+  ansible.builtin.command:
+    cmd: tailscale status --json
+  register: ts_status_before
+  changed_when: false
+  failed_when: false
+
+- name: Read current tailscale preferences
+  ansible.builtin.command:
+    cmd: tailscale debug prefs
+  register: ts_prefs
+  changed_when: false
+  failed_when: false
+
+- name: Record tailscale state
+  ansible.builtin.set_fact:
+    ts_backend_state: >-
+      {{ (ts_status_before.stdout | default('{}') | from_json).BackendState | default('') }}
+    ts_operator_user: >-
+      {{ (ts_prefs.stdout | default('{}') | from_json).OperatorUser | default('') }}
+    ts_run_ssh: >-
+      {{ (ts_prefs.stdout | default('{}') | from_json).RunSSH | default(false) }}
+  when: ts_prefs.rc | default(1) == 0
+
+# --- Join the tailnet -----------------------------------------------------
+# Unattended path: a reusable, pre-approved auth key is present.
+- name: Join the tailnet with an auth key
+  ansible.builtin.command:
+    argv:
+      - tailscale
+      - up
+      - "--authkey={{ tailscale_auth_key }}"
+      - "--hostname={{ tailscale_hostname }}"
+      - "--accept-routes={{ tailscale_accept_routes | lower }}"
+      - "--accept-dns={{ tailscale_accept_dns | lower }}"
+      - "--ssh={{ tailscale_ssh | lower }}"
+      - "--advertise-exit-node={{ tailscale_exit_node | lower }}"
+  register: tailscale_up
+  changed_when: true
+  no_log: true
+  when:
+    - tailscale_auth_key | default('') | length > 0
+    - ts_backend_state != 'Running'
+
+# Interactive path: no auth key. tailscale up prints a login URL, the CLI times
+# out, but tailscaled keeps waiting — opening the URL in a browser completes the
+# join without another playbook run.
+- name: Start interactive login when no auth key is configured
+  ansible.builtin.command:
+    argv:
+      - tailscale
+      - up
+      - "--hostname={{ tailscale_hostname }}"
+      - "--accept-dns={{ tailscale_accept_dns | lower }}"
+      - "--ssh={{ tailscale_ssh | lower }}"
+      - "--timeout={{ tailscale_login_timeout }}"
+  register: tailscale_login
+  changed_when: false
+  failed_when: false
+  when:
+    - tailscale_auth_key | default('') | length == 0
+    - ts_backend_state != 'Running'
+
+- name: Show the Tailscale login URL
+  ansible.builtin.debug:
+    msg: >-
+      Tailscale is not authenticated.
+      {{ (tailscale_login.stderr | default('')) ~ ' ' ~ (tailscale_login.stdout | default(''))
+         | regex_search('https://login\\.tailscale\\.com/[a-z]/[A-Za-z0-9]+') | default('') }}
+      Open that URL in a browser, then re-run the playbook (or wait for
+      `tailscale status` to report Running).
+  when:
+    - tailscale_auth_key | default('') | length == 0
+    - ts_backend_state != 'Running'
+
+- name: Wait for the tailscale0 interface
+  ansible.builtin.wait_for:
+    timeout: 15
+  when: tailscale_up is changed
+
+# --- Facts: tailscale IP and interface ------------------------------------
+- name: Read tailscale status after join
+  ansible.builtin.command:
+    cmd: tailscale status --json
+  register: ts_status
+  changed_when: false
+  failed_when: false
+
+- name: Record the tailnet address
+  ansible.builtin.set_fact:
+    tailscale_ip: >-
+      {{ ((ts_status.stdout | default('{}') | from_json).Self.TailscaleIPs | default([])) | first | default('') }}
+    tailscale_dns_name: >-
+      {{ (ts_status.stdout | default('{}') | from_json).Self.DNSName | default('') }}
+  when: ts_status.rc | default(1) == 0
+
+- name: Report tailnet address
+  ansible.builtin.debug:
+    msg: >-
+      Tailscale: {{ tailscale_ip | default('not authenticated yet') }}
+      {%- if tailscale_dns_name | default('') | length > 0 %} ({{ tailscale_dns_name | regex_replace('\.$', '') }}){% endif %}
+
+# --- Preferences ----------------------------------------------------------
+- name: Let the login user run tailscale without sudo
+  ansible.builtin.command:
+    cmd: "tailscale set --operator={{ tailscale_operator }}"
+  when:
+    - tailscale_ip | default('') | length > 0
+    - ts_operator_user != tailscale_operator
+  changed_when: true
+  failed_when: false
+
+- name: Enable Tailscale SSH
+  ansible.builtin.command:
+    cmd: tailscale set --ssh=true
+  when:
+    - tailscale_ip | default('') | length > 0
+    - tailscale_ssh | bool
+    - not (ts_run_ssh | default(false) | bool)
+  changed_when: true
+
+- name: Disable Tailscale SSH
+  ansible.builtin.command:
+    cmd: tailscale set --ssh=false
+  when:
+    - tailscale_ip | default('') | length > 0
+    - not (tailscale_ssh | bool)
+    - ts_run_ssh | default(false) | bool
+  changed_when: true
+
+# Downstream roles consume tailscale_ip as a bind address.
+- name: Publish tailnet bind address to downstream roles
+  ansible.builtin.set_fact:
+    mosh_bind_ip: "{{ tailscale_ip }}"
+  when: tailscale_ip | default('') | length > 0
+
+# tailscale0 shows up in ansible_interfaces only after a fresh fact gather;
+# the firewall role tests for it.
+- name: Refresh interface facts
+  ansible.builtin.setup:
+    filter: ansible_interfaces

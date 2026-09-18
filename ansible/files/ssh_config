@@ -1,0 +1,31 @@
+# devhost — client SSH config. scripts/configure.sh appends this block to
+# ~/.ssh/config on the machine you provision from, with the placeholders filled.
+#
+# Connection sharing matters: without it every terminal pane opens its own
+# connection, and each drop surfaces client-side as
+#   mux_client_request_terminate: read from master failed: Broken pipe
+# Control sockets live in ~/.ssh/sockets — create it once:
+#   mkdir -p ~/.ssh/sockets && chmod 700 ~/.ssh/sockets
+
+Host __DEVHOST__
+    HostName __HOSTNAME__
+    User __SSH_USER__
+    IdentityFile __SSH_KEY__
+    ForwardAgent yes
+    ControlMaster auto
+    ControlPath ~/.ssh/sockets/%C
+    ControlPersist 10m
+    ServerAliveInterval 30
+    ServerAliveCountMax 6
+    TCPKeepAlive yes
+
+# Attach to a named tmux session instead of the default `main`:
+#   ssh __DEVHOST__ tmux new -s myproject
+#   ssh __DEVHOST__ tmux attach -t main
+#
+# Mosh (roaming, survives sleep/network changes) — needs mosh on the client:
+#   mosh __DEVHOST__
+#
+# Web preview from the host: run your dev server on 127.0.0.1:<9000-9009> and
+# open http://<tailscale-ip>:<port> from any tailnet device (Caddy on the host
+# proxies it).

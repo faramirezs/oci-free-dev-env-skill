@@ -1,0 +1,45 @@
+---
+# Mosh runs over the tailnet; nothing is opened to the WAN.
+#
+# The mosh *client* decides the server's bind address (--bind-server=ssh, the
+# default) and uses the address the SSH connection arrived on — the tailnet IP
+# when you `mosh devhost` after joining Tailscale. No server-side bind override
+# exists: mosh-server's `-i` flag and the MOSH_SERVER_* variables do not include
+# a network selector, and Ubuntu ships no mosh-server systemd unit for a
+# drop-in to attach to. (The widely copied
+# /etc/systemd/system/mosh-server@.service.d/10-tailscale.conf is inert.)
+
+- name: Install mosh
+  ansible.builtin.apt:
+    name: mosh
+    state: present
+
+- name: Remove the inert mosh-server systemd drop-in
+  ansible.builtin.file:
+    path: /etc/systemd/system/mosh-server@.service.d
+    state: absent
+
+# pam_env reads /etc/environment for SSH sessions, including non-interactive
+# ones, which is where mosh-server runs. Keeps a session alive for a week of
+# client silence (mobile clients, laptops that sleep).
+- name: Keep mosh sessions alive across client silence
+  ansible.builtin.lineinfile:
+    path: /etc/environment
+    regexp: "^MOSH_SERVER_NETWORK_TMOUT="
+    line: "MOSH_SERVER_NETWORK_TMOUT={{ mosh_server_network_timeout }}"
+    create: true
+    mode: "0644"
+
+- name: Confirm the mosh binaries
+  ansible.builtin.command:
+    cmd: "which {{ item }}"
+  register: mosh_bins
+  changed_when: false
+  loop:
+    - mosh
+    - mosh-server
+
+- name: Show mosh binary paths
+  ansible.builtin.debug:
+    msg: "{{ item.stdout }}"
+  loop: "{{ mosh_bins.results }}"

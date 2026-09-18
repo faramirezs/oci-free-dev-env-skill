@@ -1,0 +1,109 @@
+---
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name: "{{ base_packages }}"
+    state: present
+    install_recommends: false
+
+- name: Set system timezone
+  community.general.timezone:
+    name: "{{ timezone }}"
+
+# --- Logs -----------------------------------------------------------------
+- name: Ensure journal log directory exists
+  ansible.builtin.file:
+    path: /var/log/journal
+    state: directory
+    owner: root
+    group: systemd-journal
+    mode: "02755"
+
+- name: Enable persistent journal
+  ansible.builtin.lineinfile:
+    path: /etc/systemd/journald.conf
+    regexp: "^#?Storage="
+    line: "Storage=persistent"
+    create: true
+    mode: "0644"
+  notify: Restart systemd-journald
+
+# --- Unattended security updates -----------------------------------------
+- name: Configure automatic security updates
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+      APT::Periodic::Download-Upgradeable-Packages "1";
+      Unattended-Upgrade::DevRelease "false";
+      Unattended-Upgrade::AutoFixInterruptedDpkg "true";
+      Unattended-Upgrade::MinimalSteps "true";
+      Unattended-Upgrade::InstallOnShutdown "false";
+      Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+      Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
+      Unattended-Upgrade::Remove-Unused-Dependencies "true";
+      Unattended-Upgrade::Automatic-Reboot "false";
+      Unattended-Upgrade::Automatic-Reboot-Time "03:00";
+    mode: "0644"
+  when: unattended_upgrades_enabled
+
+- name: Configure which updates are installed automatically
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/50unattended-upgrades
+    content: |
+      Unattended-Upgrade::Allowed-Origins {
+        "${distro_id}:${distro_codename}-security";
+        "${distro_id}:${distro_codename}-updates";
+      };
+      Unattended-Upgrade::Mail "";
+      Unattended-Upgrade::SyslogEnable "true";
+      Unattended-Upgrade::LogFile "/var/log/unattended-upgrades/unattended-upgrades.log";
+    mode: "0644"
+  when: unattended_upgrades_enabled
+
+- name: Create log directory for unattended-upgrades
+  ansible.builtin.file:
+    path: /var/log/unattended-upgrades
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# --- Per-user SSH hygiene -------------------------------------------------
+- name: Ensure per-user .ssh directory
+  ansible.builtin.file:
+    path: "/home/{{ item }}/.ssh"
+    state: directory
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0700"
+  loop: "{{ target_users }}"
+
+- name: Ensure authorized_keys permissions
+  ansible.builtin.file:
+    path: "/home/{{ item }}/.ssh/authorized_keys"
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0600"
+  loop: "{{ target_users }}"
+  failed_when: false
+
+# force: false — seed a config only when the user has none. Overwriting here
+# would delete host aliases the user added.
+- name: Seed per-user SSH client config when absent
+  ansible.builtin.copy:
+    dest: "/home/{{ item }}/.ssh/config"
+    content: |
+      # Managed by devhost Ansible. Add host aliases below.
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0600"
+    force: false
+  loop: "{{ target_users }}"
+  when: target_users | length > 0

@@ -1,0 +1,41 @@
+---
+- name: Install fail2ban
+  ansible.builtin.apt:
+    name:
+      - fail2ban
+      - python3-systemd
+    state: present
+
+- name: Configure the sshd jail
+  ansible.builtin.copy:
+    dest: /etc/fail2ban/jail.d/devhost.local
+    content: |
+      [DEFAULT]
+      backend = systemd
+      bantime  = {{ fail2ban_bantime }}
+      findtime = {{ fail2ban_findtime }}
+      maxretry = {{ fail2ban_maxretry }}
+      ignoreip = 127.0.0.1/8 ::1{% if fail2ban_ignore_tailnet %} 100.64.0.0/10{% endif %}
+
+      [sshd]
+      enabled = true
+      port    = ssh
+    mode: "0644"
+  notify: Restart fail2ban
+
+- name: Enable and start fail2ban
+  ansible.builtin.service:
+    name: fail2ban
+    state: started
+    enabled: true
+
+- name: Read fail2ban status
+  ansible.builtin.command:
+    cmd: fail2ban-client status
+  register: fail2ban_status
+  changed_when: false
+  failed_when: false
+
+- name: Show active jails
+  ansible.builtin.debug:
+    var: fail2ban_status.stdout_lines
